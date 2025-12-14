@@ -140,10 +140,8 @@ a{color:inherit}
 .company{display:flex;align-items:center;gap:8px}
 .company .emoji{font-size:16px}
 .company .company-text{display:flex;flex-direction:column}
-.company .company-text .title{font-weight:600;color:#ffffff;font-size:16px}
-.company .company-text .sub{font-size:14px;font-weight:400;color:#9ca3af}
-[data-theme="dark"] .company .company-text .title{color:#ffffff}
-[data-theme="dark"] .company .company-text .sub{color:#9ca3af}
+.company .company-text .title{font-weight:600;color:var(--text);font-size:16px}
+.company .company-text .sub{font-size:14px;font-weight:400;color:var(--muted)}
 .company .company-text .sub strong{font-weight:400}
 .company .company-text .sub .team{color:var(--muted)}
 .sticky{position:sticky;left:0;background:var(--surface)}
