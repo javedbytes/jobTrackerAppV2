@@ -1,12 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { useGoogleLogin } from '@react-oauth/google'
-import { findAppDataFile, readJsonFile, createJsonFile, updateJsonFile } from './googleDrive'
-import { loadToken, saveToken, clearToken, loadFileId, saveFileId, clearFileId } from './auth'
 import { loadApplications, saveApplications } from './storage'
 import Tabs from './components/Tabs'
 import Table, { ColumnKey } from './components/Table'
 import Tag from './components/Tag'
-import { STAGE_ORDER, stageColors, verdictColors } from './data'
+import { STAGE_ORDER, stageColors, verdictColors, applications as seedData } from './data'
 import { Application } from './types'
 import AddModal from './components/AddModal'
 
@@ -30,63 +27,14 @@ export default function App() {
     const [view, setView] = useState<ViewKey>('all')
     const [query, setQuery] = useState('')
     const [sort, setSort] = useState<{ column: ColumnKey; dir: 'asc' | 'desc' }>({ column: 'company', dir: 'asc' })
-    const [apps, setApps] = useState<Application[]>(() => loadApplications([]))
+    const [apps, setApps] = useState<Application[]>(() => loadApplications(seedData))
     const [modalOpen, setModalOpen] = useState(false)
     const [editApp, setEditApp] = useState<Application | null>(null)
     const [infoApp, setInfoApp] = useState<Application | null>(null)
     const [dark, setDark] = useState(true)
-    const [driveToken, setDriveToken] = useState('')
-    const [driveFileId, setDriveFileId] = useState('')
-    const filename = 'job_applications.json'
-    const connected = !!driveToken && !!driveFileId
+
     useEffect(() => {
         document.body.setAttribute('data-theme', 'dark')
-        // Try restoring token and file ID from sessionStorage
-        const rec = loadToken()
-        const cachedFileId = loadFileId()
-        if (rec) {
-            setDriveToken(rec.accessToken)
-            // If we have a cached file ID, try to read immediately
-            if (cachedFileId) {
-                setDriveFileId(cachedFileId)
-                readJsonFile(rec.accessToken, cachedFileId)
-                    .then((remote) => setApps(remote as Application[]))
-                    .catch(async () => {
-                        // If cached ID is stale, re-discover
-                        try {
-                            const found = await findAppDataFile(rec.accessToken, filename)
-                            if (found?.id) {
-                                setDriveFileId(found.id)
-                                saveFileId(found.id)
-                                const remote = await readJsonFile(rec.accessToken, found.id)
-                                setApps(remote as Application[])
-                            } else {
-                                const created = await createJsonFile(rec.accessToken, filename, [])
-                                setDriveFileId(created.id)
-                                saveFileId(created.id)
-                            }
-                        } catch (e) {
-                            console.error(e)
-                        }
-                    })
-            } else {
-                // No cached ID: find or create
-                findAppDataFile(rec.accessToken, filename)
-                    .then(async (found) => {
-                        if (found?.id) {
-                            setDriveFileId(found.id)
-                            saveFileId(found.id)
-                            const remote = await readJsonFile(rec.accessToken, found.id)
-                            setApps(remote as Application[])
-                        } else {
-                            const created = await createJsonFile(rec.accessToken, filename, [])
-                            setDriveFileId(created.id)
-                            saveFileId(created.id)
-                        }
-                    })
-                    .catch((e) => console.error(e))
-            }
-        }
     }, [])
 
     const filtered = useMemo(() => {
@@ -107,49 +55,8 @@ export default function App() {
         setSort((s) => (s.column === col ? { column: col, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { column: col, dir: 'asc' }))
     }
 
-    const login = useGoogleLogin({
-        scope: 'https://www.googleapis.com/auth/drive.appdata',
-        onSuccess: async (tokenResponse) => {
-            const token = tokenResponse.access_token
-            setDriveToken(token)
-            saveToken(token, (tokenResponse as any)?.expires_in ?? 3600)
-            try {
-                const found = await findAppDataFile(token, filename)
-                if (found?.id) {
-                    setDriveFileId(found.id)
-                    saveFileId(found.id)
-                    const remote = await readJsonFile(token, found.id)
-                    setApps(remote as Application[])
-                    saveApplications(remote as Application[])
-                } else {
-                    const created = await createJsonFile(token, filename, apps)
-                    setDriveFileId(created.id)
-                    saveFileId(created.id)
-                }
-            } catch (e) {
-                console.error(e)
-            }
-        },
-        onError: (err) => {
-            console.error('Google login error', err)
-        },
-    })
-
-    async function persistAll(next: Application[]) {
-        // Always persist locally (with 7-day TTL)
+    function persistAll(next: Application[]) {
         saveApplications(next)
-        // Optionally patch Drive if connected
-        if (driveToken && driveFileId) {
-            try {
-                await updateJsonFile(driveToken, driveFileId, next)
-            } catch (e: any) {
-                if (e?.message === 'unauthorized') {
-                    setDriveToken('')
-                    clearToken()
-                }
-                console.error(e)
-            }
-        }
     }
 
     return (
@@ -162,16 +69,11 @@ export default function App() {
                 <div className="kv">
                     <button
                         className="btn-gradient"
-                        disabled={!connected}
-                        title={connected ? 'Add new job' : 'Connect to Google to add'}
-                        onClick={() => {
-                            if (!connected) { alert('Please sync with Google to add jobs.'); return }
-                            setModalOpen(true)
-                        }}
+                        title="Add new job"
+                        onClick={() => setModalOpen(true)}
                     >
                         ➕ New Job
                     </button>
-                    <button className="btn" onClick={() => login()}>{driveToken ? 'Connected to Google' : 'Sync with Google'}</button>
                     <button
                         className="icon-btn"
                         aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -194,21 +96,14 @@ export default function App() {
                 <input className="search" placeholder="Search companies, stages…" value={query} onChange={(e) => setQuery(e.target.value)} />
             </div>
 
-            {!connected && (
-                <div className="notice" style={{ margin: '8px 0', padding: '8px', background: '#223', borderRadius: 6 }}>
-                    Connect to Google to edit. Drive sync is required.
-                </div>
-            )}
-
             {view === 'all' && (
                 <Table
                     rows={filtered}
                     onSort={toggleSort}
                     sort={sort}
                     onInfo={(app) => setInfoApp(app)}
-                    onEdit={(app) => { if (!connected) { alert('Please sync with Google to edit.'); return } setEditApp(app); setModalOpen(true) }}
+                    onEdit={(app) => { setEditApp(app); setModalOpen(true) }}
                     onDelete={(app) => {
-                        if (!connected) { alert('Please sync with Google to delete.'); return }
                         if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) {
                             setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next })
                         }
@@ -220,8 +115,8 @@ export default function App() {
                 <GroupedByStage
                     rows={filtered}
                     onInfo={(app) => setInfoApp(app)}
-                    onEdit={(app) => { if (!connected) { alert('Please sync with Google to edit.'); return } setEditApp(app); setModalOpen(true) }}
-                    onDelete={(app) => { if (!connected) { alert('Please sync with Google to delete.'); return } if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) { setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next }) } }}
+                    onEdit={(app) => { setEditApp(app); setModalOpen(true) }}
+                    onDelete={(app) => { if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) { setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next }) } }}
                 />
             )}
 
@@ -229,8 +124,8 @@ export default function App() {
                 <GroupedByVerdict
                     rows={filtered}
                     onInfo={(app) => setInfoApp(app)}
-                    onEdit={(app) => { if (!connected) { alert('Please sync with Google to edit.'); return } setEditApp(app); setModalOpen(true) }}
-                    onDelete={(app) => { if (!connected) { alert('Please sync with Google to delete.'); return } if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) { setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next }) } }}
+                    onEdit={(app) => { setEditApp(app); setModalOpen(true) }}
+                    onDelete={(app) => { if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) { setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next }) } }}
                 />
             )}
 
@@ -238,12 +133,10 @@ export default function App() {
                 <GroupedByDue
                     rows={filtered}
                     onInfo={(app) => setInfoApp(app)}
-                    onEdit={(app) => { if (!connected) { alert('Please sync with Google to edit.'); return } setEditApp(app); setModalOpen(true) }}
-                    onDelete={(app) => { if (!connected) { alert('Please sync with Google to delete.'); return } if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) { setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next }) } }}
+                    onEdit={(app) => { setEditApp(app); setModalOpen(true) }}
+                    onDelete={(app) => { if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) { setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next }) } }}
                 />
             )}
-
-            {/* <div className="footer">Built with React + Vite · Notion-like table UI</div> */}
 
             <AddModal
                 open={modalOpen}
@@ -251,7 +144,6 @@ export default function App() {
                 initial={editApp || undefined}
                 onAdd={(app) => {
                     setApps(prev => {
-                        if (!connected) { alert('Please sync with Google to add.'); return prev }
                         const next = [app, ...prev];
                         persistAll(next);
                         return next
@@ -259,7 +151,6 @@ export default function App() {
                 }}
                 onUpdate={(app) => {
                     setApps(prev => {
-                        if (!connected) { alert('Please sync with Google to update.'); return prev }
                         const next = prev.map(a => a.id === app.id ? app : a);
                         persistAll(next);
                         return next
@@ -308,7 +199,7 @@ function GroupedByStage({ rows, onInfo, onEdit, onDelete }: { rows: Application[
                         <Tag label={key} color={stageColors[key] || 'gray'} />
                         <span>· {groups.get(key)?.length ?? 0}</span>
                     </div>
-                    <Table rows={groups.get(key)!} onSort={() => { }} sort={{ column: 'company', dir: 'asc' }} onInfo={onInfo} onEdit={onEdit} onDelete={(app) => { if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) { setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next }) } }} />
+                    <Table rows={groups.get(key)!} onSort={() => { }} sort={{ column: 'company', dir: 'asc' }} onInfo={onInfo} onEdit={onEdit} onDelete={onDelete} />
                 </div>
             ))}
         </div>
@@ -337,7 +228,7 @@ function GroupedByVerdict({ rows, onInfo, onEdit, onDelete }: { rows: Applicatio
                         <Tag label={key} color={verdictColors[key] || 'gray'} />
                         <span>· {groups.get(key)?.length ?? 0}</span>
                     </div>
-                    <Table rows={groups.get(key)!} onSort={() => { }} sort={{ column: 'company', dir: 'asc' }} onInfo={onInfo} onEdit={onEdit} onDelete={(app) => { if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) { setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next }) } }} />
+                    <Table rows={groups.get(key)!} onSort={() => { }} sort={{ column: 'company', dir: 'asc' }} onInfo={onInfo} onEdit={onEdit} onDelete={onDelete} />
                 </div>
             ))}
         </div>
@@ -363,15 +254,15 @@ function GroupedByDue({ rows, onInfo, onEdit, onDelete }: { rows: Application[];
         <div>
             <div className="group">
                 <div className="group-title"><Tag label="Upcoming" color="green" />· {groups.upcoming.length}</div>
-                <Table rows={groups.upcoming} onSort={() => { }} sort={{ column: 'dueDate' as ColumnKey, dir: 'asc' }} onInfo={onInfo} onEdit={onEdit} onDelete={(app) => { if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) { setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next }) } }} />
+                <Table rows={groups.upcoming} onSort={() => { }} sort={{ column: 'dueDate' as ColumnKey, dir: 'asc' }} onInfo={onInfo} onEdit={onEdit} onDelete={onDelete} />
             </div>
             <div className="group">
                 <div className="group-title"><Tag label="Past" color="purple" />· {groups.past.length}</div>
-                <Table rows={groups.past} onSort={() => { }} sort={{ column: 'dueDate' as ColumnKey, dir: 'asc' }} onInfo={onInfo} onEdit={onEdit} onDelete={(app) => { if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) { setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next }) } }} />
+                <Table rows={groups.past} onSort={() => { }} sort={{ column: 'dueDate' as ColumnKey, dir: 'asc' }} onInfo={onInfo} onEdit={onEdit} onDelete={onDelete} />
             </div>
             <div className="group">
                 <div className="group-title"><Tag label="No Due Date" color="gray" />· {groups.none.length}</div>
-                <Table rows={groups.none} onSort={() => { }} sort={{ column: 'company', dir: 'asc' }} onInfo={onInfo} onEdit={onEdit} onDelete={(app) => { if (confirm(`Delete ${app.company}${app.position ? ' – ' + app.position : ''}?`)) { setApps(prev => { const next = prev.filter(a => a.id !== app.id); persistAll(next); return next }) } }} />
+                <Table rows={groups.none} onSort={() => { }} sort={{ column: 'company', dir: 'asc' }} onInfo={onInfo} onEdit={onEdit} onDelete={onDelete} />
             </div>
         </div>
     )
